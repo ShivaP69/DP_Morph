@@ -1,0 +1,60 @@
+
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1.inset_locator import zoomed_inset_axes
+from mpl_toolkits.axes_grid1.inset_locator import mark_inset
+from scipy import misc
+import cv2
+
+fig = plt.figure()
+ax = fig.add_subplot(111)
+image = cv2.imread("/home/parsar0000/oct_git/main_code/sample_zoom.png")
+ax.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), extent=[0, 224, 0, 224], aspect='auto')
+axins = zoomed_inset_axes(ax, 2.5, loc='upper left')
+axins.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), extent=[0, 224, 0, 224], aspect='auto')
+axins.set_xlim(2, 60)
+axins.set_ylim(120, 130)
+plt.xticks(visible=False)
+plt.yticks(visible=False)
+axins.yaxis.get_major_locator().set_params(nbins=2)
+axins.xaxis.get_major_locator().set_params(nbins=2)
+axins.tick_params(labelleft=False, labelbottom=False)
+mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="0.5")
+plt.draw()
+plt.show()
+
+"""
+axins = zoomed_inset_axes(ax, 2.5, loc='upper center')
+axins.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), extent=[0, 512, 0, 512], aspect='auto')
+axins.set_xlim(160, 230)
+axins.set_ylim(360, 390)
+plt.xticks(visible=False)
+plt.yticks(visible=False)
+axins.yaxis.get_major_locator().set_params(nbins=2)
+axins.xaxis.get_major_locator().set_params(nbins=2)
+axins.tick_params(labelleft=False, labelbottom=False)
+mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="0.5")
+plt.draw()
+axins = zoomed_inset_axes(ax, 2.5, loc='lower left')
+axins.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), extent=[0, 512, 0, 512], aspect='auto')
+axins.set_xlim(120, 170)
+axins.set_ylim(240, 290)
+plt.xticks(visible=False)
+plt.yticks(visible=False)
+axins.yaxis.get_major_locator().set_params(nbins=2)
+axins.xaxis.get_major_locator().set_params(nbins=2)
+axins.tick_params(labelleft=False, labelbottom=False)
+mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="0.5")
+plt.draw()
+axins = zoomed_inset_axes(ax, 2.5, loc='lower center')
+axins.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), extent=[0, 512, 0, 512], aspect='auto')
+axins.set_xlim(300, 340)
+axins.set_ylim(170, 220)
+plt.xticks(visible=False)
+plt.yticks(visible=False)
+axins.yaxis.get_major_locator().set_params(nbins=2)
+axins.xaxis.get_major_locator().set_params(nbins=2)
+axins.tick_params(labelleft=False, labelbottom=False)
+mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="0.5")
+plt.draw()  # plt.legend()   plt.gcf().set_dpi(400) plt.show()
+"""
+
