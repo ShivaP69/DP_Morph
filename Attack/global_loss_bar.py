@@ -80,7 +80,6 @@ plt.close()
 print(f"Saved faceted boxplot to {output_path}")
 
 """
-import argparse
 
 """import pandas as pd
 import ast
@@ -249,7 +248,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.metrics import f1_score, accuracy_score
-import os
+
+
+dataset= "UMNData"
+dataset_sum="UMN"
+main_df = pd.read_csv(f'csv_results_chinchilla/{dataset}_loss_values.csv')
+shadow_df = pd.read_csv(f'csv_results_chinchilla/{dataset_sum}_shadow.csv')
 
 
 def parse_array_string(s):
@@ -263,16 +267,31 @@ def parse_array_string(s):
         return np.array([])
 
 
+shadow_df['epsilon'] = shadow_df['epsilon'].fillna('None').astype(str)
+shadow_df['Operation'] = shadow_df['Operation'].fillna('None')
+shadow_df['Morphology'] = shadow_df['Morphology'].astype(str)
+
+
+main_df['epsilon'] = main_df['epsilon'].fillna('None').astype(str)
+main_df['Operation'] = main_df['Operation'].fillna('None')
+main_df['Morphology'] = main_df['Morphology'].astype(str)
+
+
+main_df['loss_mem'] = main_df['loss_mem'].apply(parse_array_string)
+main_df['loss_non_mem'] = main_df['loss_non_mem'].apply(parse_array_string)
+main_df['true_label'] = main_df['true_label'].apply(parse_array_string)
+
+
 def compute_predictions(row, shadow_df):
+
     shadow_row = shadow_df[
         (shadow_df['Morphology'] == row['Morphology']) &
         (shadow_df['Operation'] == row['Operation']) &
         (shadow_df['epsilon'] == row['epsilon'])
-        ]
+    ]
 
     if shadow_row.empty:
-        print(
-            f"No matching shadow row for Morphology={row['Morphology']}, Operation={row['Operation']}, epsilon={row['epsilon']}")
+        print(f"No matching shadow row for Morphology={row['Morphology']}, Operation={row['Operation']}, epsilon={row['epsilon']}")
         return np.zeros_like(row['true_label'])
 
     threshold = shadow_row['shadow_threshold'].iloc[0]
@@ -281,29 +300,55 @@ def compute_predictions(row, shadow_df):
     loss_non_mem = row['loss_non_mem']
     true_label = row['true_label']
 
+
     lengths = {
         'loss_mem': len(loss_mem),
         'loss_non_mem': len(loss_non_mem),
         'true_label': len(true_label)
     }
 
+
     predictions = np.zeros_like(true_label)
-    j = 0
+    j=0
     for i, label in enumerate(loss_mem):
-        loss1 = loss_mem[i]
-        predictions[i] = 1 if not np.isnan(loss1) and loss1 <= threshold else 0
-        j += 1
+            loss1 = loss_mem[i]
+            predictions[i] = 1 if not np.isnan(loss1) and loss1 <= threshold else 0
+            j+=1
 
     for i, label in enumerate(loss_non_mem):
-        loss2 = loss_non_mem[i]
-        predictions[j + i] = 1 if not np.isnan(loss2) and loss2 <= threshold else 0
+
+            loss2 = loss_non_mem[i]
+            predictions[j+i] = 1 if not np.isnan(loss2) and loss2 <= threshold else 0
 
     return predictions
+
+# Apply predictions to each row
+main_df['prediction'] = main_df.apply(lambda row: compute_predictions(row, shadow_df), axis=1)
+
+# Convert prediction arrays to string format for CSV output
+main_df['prediction'] = main_df['prediction'].apply(lambda x: '[' + ' '.join(map(str, x)) + ']')
+
+# Save the modified dataframe to a new CSV
+main_df.to_csv(f'csv_results_chinchilla/{dataset}_loss_values_with_predictions.csv', index=False)
+
+print(f"Modified CSV saved as f'{dataset}_loss_values_with_predictions.csv'")
+
+
+
+df = pd.read_csv(f'csv_results_chinchilla/{dataset}_loss_values_with_predictions.csv')
+
+
+
+
+df['true_label'] = df['true_label'].apply(parse_array_string)
+df['prediction'] = df['prediction'].apply(parse_array_string)
+
 
 
 def compute_metrics(row):
     true_labels = row['true_label']
     predictions = row['prediction']
+
 
     if len(true_labels) != len(predictions) or len(true_labels) == 0:
         print(
@@ -311,63 +356,26 @@ def compute_metrics(row):
         print(f"true_label length: {len(true_labels)}, prediction length: {len(predictions)}")
         return pd.Series({'f1_score': np.nan, 'accuracy': np.nan})
 
+
     f1 = f1_score(true_labels, predictions, zero_division=0)
     accuracy = accuracy_score(true_labels, predictions)
 
     return pd.Series({'f1_score': f1, 'accuracy': accuracy})
 
 
-datasets=["UMNData","DukeData"]
-dataset_sums=["UMN","Duke"]
-for dataset, dataset_sum in zip(datasets, dataset_sums):
 
-    main_df = pd.read_csv(f'csv_results_chinchilla/{dataset}_loss_values.csv')
-    shadow_df = pd.read_csv(f'csv_results_chinchilla/{dataset_sum}_shadow.csv')
-
-    shadow_df['epsilon'] = shadow_df['epsilon'].fillna('None').astype(str)
-    shadow_df['Operation'] = shadow_df['Operation'].fillna('None')
-    shadow_df['Morphology'] = shadow_df['Morphology'].astype(str)
+metrics = df.apply(compute_metrics, axis=1)
+df['f1_score'] = metrics['f1_score']
+df['accuracy'] = metrics['accuracy']
 
 
-    main_df['epsilon'] = main_df['epsilon'].fillna('None').astype(str)
-    main_df['Operation'] = main_df['Operation'].fillna('None')
-    main_df['Morphology'] = main_df['Morphology'].astype(str)
+df.to_csv(f'csv_results_chinchilla/f1_accuracy_{dataset_sum}.csv', index=False)
+
+print("Modified CSV with f1_score and accuracy columns saved as 'f1_accuracy'")
 
 
-    main_df['loss_mem'] = main_df['loss_mem'].apply(parse_array_string)
-    main_df['loss_non_mem'] = main_df['loss_non_mem'].apply(parse_array_string)
-    main_df['true_label'] = main_df['true_label'].apply(parse_array_string)
-
-
-    # Apply predictions to each row
-    main_df['prediction'] = main_df.apply(lambda row: compute_predictions(row, shadow_df), axis=1)
-
-    # Convert prediction arrays to string format for CSV output
-    main_df['prediction'] = main_df['prediction'].apply(lambda x: '[' + ' '.join(map(str, x)) + ']')
-
-    # Save the modified dataframe to a new CSV
-    if os.path.isfile(f'csv_results_chinchilla/{dataset}_loss_values_with_predictions.csv'):
-        df = pd.read_csv(f'csv_results_chinchilla/{dataset}_loss_values_with_predictions.csv')
-        df['true_label'] = df['true_label'].apply(parse_array_string)
-        df['prediction'] = df['prediction'].apply(parse_array_string)
-    else:
-        main_df.to_csv(f'csv_results_chinchilla/{dataset}_loss_values_with_predictions.csv', index=False)
-        print(f"Modified CSV saved as f'{dataset}_loss_values_with_predictions.csv'")
-        df=main_df.copy()
-
-
-
-    metrics = df.apply(compute_metrics, axis=1)
-    df['f1_score'] = metrics['f1_score']
-    df['accuracy'] = metrics['accuracy']
-
-
-    df.to_csv(f'csv_results_chinchilla/f1_accuracy_{dataset_sum}.csv', index=False)
-    print("Modified CSV with f1_score and accuracy columns saved as 'f1_accuracy'")
-
-
-    mean_df = (df[['Operation', 'epsilon', 'f1_score', 'accuracy']])
-    mean_df.columns = ['morphology', 'epsilon', 'F1', 'accuracy']
-    mean_df = mean_df.groupby(['epsilon', 'morphology']).mean()
-    print(mean_df.to_latex(index=True, multirow=True, float_format="%.2f", label='tab:loss-attack', caption='Comparison of global loss-based attack performances'))
+mean_df = (df[['Operation', 'epsilon', 'f1_score', 'accuracy']])
+mean_df.columns = ['morphology', 'epsilon', 'F1', 'accuracy']
+mean_df = mean_df.groupby(['epsilon', 'morphology']).mean()
+print(mean_df.to_latex(index=True, multirow=True, float_format="%.2f", label='tab:loss-attack', caption='Comparison of global loss-based attack performances'))
 

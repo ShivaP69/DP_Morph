@@ -21,27 +21,27 @@ def global_attack(args,shadow_data,data,victim_model, threshold, output_folder='
     non_members_synthetic = shadow_data.shadow_attack_paths
     members_data = DatasetOct(members, attack=True)
     non_members_victim_data = DatasetOct(non_members_victim, attack=True)
-    non_members_synthetic_data = DatasetOct(non_members_synthetic, attack=True)
+    non_members_shadow_data = DatasetOct(non_members_synthetic, attack=True)
 
     # Get dataset sizes
     non_member_victim_size = len(non_members_victim_data)
-    non_member_synthetic_size = len(non_members_synthetic_data)
+    non_member_shadow_size = len(non_members_shadow_data)
     #print(f"Non-member victim size: {non_member_victim_size}, Non-member synthetic size: {non_member_synthetic_size}")
 
     # Sample non-member datasets to have equal sizes
     non_member_target_size = min(non_member_victim_size,
-                                 non_member_synthetic_size)  # to have the same numbers of out of distribution and same distribution
+                                 non_member_shadow_size)  # to have the same numbers of out of distribution and same distribution
     if non_member_victim_size > non_member_target_size:
         indices = np.random.choice(non_member_victim_size, non_member_target_size, replace=False)
         non_members_victim_data = Subset(non_members_victim_data, indices)
         #print(f"Sampled non-member victim dataset to size: {non_member_target_size}")
-    if non_member_synthetic_size > non_member_target_size:
-        indices = np.random.choice(non_member_synthetic_size, non_member_target_size, replace=False)
-        non_members_synthetic_data = Subset(non_members_synthetic_data, indices)
+    if non_member_shadow_size > non_member_target_size:
+        indices = np.random.choice(non_member_shadow_size, non_member_target_size, replace=False)
+        non_members_shadow_data = Subset(non_members_shadow_data, indices)
         #print(f"Sampled non-member synthetic dataset to size: {non_member_target_size}")
-    non_members_synthetic_data = FixedTargetWrapper(non_members_synthetic_data,
+    non_members_selected_shadow_data = FixedTargetWrapper(non_members_shadow_data,
                                                     fixed_target=0)  # will be used for the victim"""
-    combined_non_member = torch.utils.data.ConcatDataset([non_members_victim_data, non_members_synthetic_data])
+    combined_non_member = torch.utils.data.ConcatDataset([non_members_victim_data, non_members_selected_shadow_data])
     #combined_non_member=non_members_victim_data
     member_size = len(members_data)
     non_member_size = len(combined_non_member)
@@ -75,8 +75,8 @@ def global_attack(args,shadow_data,data,victim_model, threshold, output_folder='
         for data, labels, targets in attack_val_dataloader:
             data, labels, targets = data.to(device), labels.to(device), targets.to(device)
             pred = victim_model(data)
-            if args.morphology:
-                pred= apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
+            """if args.morphology:
+                pred= apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)"""
             if args.defensetype == 2:
                 pred= torch.round(pred)
             batch_losses = []
@@ -280,17 +280,17 @@ def compare_loss_distributions(args,mem_loss, non_mem_loss,output_folder="csv_re
 
 
 
-def membership_evaluation(args,data_loader_mem,victim_model,criterion_seg): # based on victim model
+def membership_evaluation(args,data_loader,victim_model,criterion_seg): # based on victim model
 
     loss_membership = []
     victim_model.eval()
     with torch.no_grad():
-        for data, labels, targets in data_loader_mem:
+        for data, labels, targets in data_loader:
             data, labels, targets = data.to(device), labels.to(device), targets.to(device)
             pred = victim_model(data)
-            # in this implementation, morphology is not part of the model so we should apply it manually
+            """# in this implementation, morphology is not part of the model so we should apply it manually
             if args.morphology:
-                pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
+                pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)""" #this is not necessary, we are not using Morph as a post processing approach
             for i in range(data.size(0)):
                 single_pred = pred[i:i + 1]  # Process one sample
                 single_label = labels[i:i + 1].squeeze(1)
@@ -301,34 +301,34 @@ def membership_evaluation(args,data_loader_mem,victim_model,criterion_seg): # ba
     return loss_membership
 
 
-def membership_loss(args,data,shadow_data,victim_model):
+def membership_loss(args,data,shadow_data,victim_model): # in non-synthetic case shadow data=data
     # calculate loss distribution
 
     criterion_seg = CombinedLoss()
     members = data.victim_attack_paths_member
     non_members_victim = data.victim_attack_paths_non_member
-    non_members_synthetic = shadow_data.shadow_attack_paths_non_member
+    non_members_shadow_based = shadow_data.shadow_attack_paths_non_member # when we are not using synthetic data, both data and shadow data are the same
     members_data = DatasetOct(members, attack=True)
     non_members_victim_data = DatasetOct(non_members_victim, attack=True)
-    non_members_synthetic_data = DatasetOct(non_members_synthetic, attack=True)
+    non_members_shadow_data = DatasetOct(non_members_shadow_based, attack=True)
 
     # Get dataset sizes
     non_member_victim_size = len(non_members_victim_data)
-    non_member_synthetic_size = len(non_members_synthetic_data)
-    print(f"Non-member victim size: {non_member_victim_size}, Non-member shadow size: {non_member_synthetic_size}")
+    non_member_shadow_size = len(non_members_shadow_data)
+    print(f"Non-member victim size: {non_member_victim_size}, Non-member shadow size: {non_member_shadow_size}")
 
     # Sample non-member datasets to have equal sizes
-    non_member_target_size = min(non_member_victim_size, non_member_synthetic_size) # to have same numbers of out of distribution and same distribution
+    non_member_target_size = min(non_member_victim_size, non_member_shadow_size) # to have same numbers of out of distribution and same distribution (However,this is important in case of using synthetic data)
     if non_member_victim_size > non_member_target_size:
         indices = np.random.choice(non_member_victim_size, non_member_target_size, replace=False)
         non_members_victim_data = Subset(non_members_victim_data, indices)
         print(f"Sampled non-member victim dataset to size: {non_member_target_size}")
-    if non_member_synthetic_size > non_member_target_size:
-        indices = np.random.choice(non_member_synthetic_size, non_member_target_size, replace=False)
-        non_members_synthetic_data = Subset(non_members_synthetic_data, indices)
+    if non_member_shadow_size > non_member_target_size:
+        indices = np.random.choice(non_member_shadow_size, non_member_target_size, replace=False)
+        non_members_shadow_data = Subset(non_members_shadow_data, indices)
         print(f"Sampled non-member synthetic dataset to size: {non_member_target_size}")
-    non_members_synthetic_data = FixedTargetWrapper(non_members_synthetic_data, fixed_target=0)  # will be used for the victim
-    combined_non_member = torch.utils.data.ConcatDataset([non_members_victim_data, non_members_synthetic_data])
+    non_members_selected_shadow_data = FixedTargetWrapper(non_members_shadow_data, fixed_target=0)  # will be used for the victim so target should be 0 (non-member)
+    combined_non_member = torch.utils.data.ConcatDataset([non_members_victim_data, non_members_selected_shadow_data])
     #combined_non_member=non_members_victim_data
     member_size = len(members_data)
     non_member_size = len(combined_non_member)
@@ -340,7 +340,6 @@ def membership_loss(args,data,shadow_data,victim_model):
         # Sample from member dataset
         indices = np.random.choice(member_size, target_size, replace=False)
         members_data = Subset(members_data, indices)
-
 
     elif non_member_size > target_size:
         # Sample from non-member dataset
@@ -357,7 +356,7 @@ def membership_loss(args,data,shadow_data,victim_model):
 
 
 
-def membership_loss_victim_only(args,data,victim_model):
+def membership_loss_victim_only(args,data,victim_model): # in case that we do not want to use shadow data
     # calculate loss distribution
     criterion_seg = CombinedLoss()
     members = data.victim_attack_paths_member

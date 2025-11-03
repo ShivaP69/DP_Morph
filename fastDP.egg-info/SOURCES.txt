@@ -1,0 +1,6 @@
+LICENSE
+README.md
+fastDP.egg-info/PKG-INFO
+fastDP.egg-info/SOURCES.txt
+fastDP.egg-info/dependency_links.txt
+fastDP.egg-info/top_level.txt

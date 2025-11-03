@@ -1,7 +1,7 @@
 import argparse
 from data import split_and_copy
 from data import DatasetOct
-from utilis_train import get_victim, get_shadow,get_attack, get_shadow_data_generation,get_shadow_multiple, get_attack_multiple, get_attack_patchify
+from utilis_train import get_victim, get_shadow,get_attack, get_shadow_data_generation,get_shadow_multiple, get_attack_multiple, get_attack_patchify,having_different_shadow,get_attack_different_shadow,prepare_data_for_get_attack
 import os
 from attack_train import test_attack_model_multiple
 from global_attack import global_attack
@@ -39,14 +39,10 @@ def save_shaodw_thr(args,shadow_threshold):
 
 def main(args):
     print(args.epsilon)
-
-    if args.main_dir == "UMNData":
-        main_path = "../UMNData/"
-    else:
-        main_path = "../DukeData/"
-
+    #print("Hi")
+    main_dir=args.main_dir
     if args.synthetic_data:
-        data= split_and_copy_synthetic(os.path.join(main_path, 'train'), os.path.join(main_path, 'val'),DME7=True)
+        data= split_and_copy_synthetic(os.path.join(main_dir, 'train'), os.path.join(main_dir, 'val'),DME7=True)
         print(""""training victim model when synthetic data is used""")
         victim_model,_=get_victim(data,args)
         # we should use victim model to label external dataset
@@ -54,7 +50,7 @@ def main(args):
         # one time is enough!
 
         if args.DPSGD_for_Saving_and_synthetic:
-            if args.main_dir == "DukeData":
+            if main_dir == "DukeData":
                 if args.morphology==True:
                        file_name_shadow='morphology_shadow_dataset_DPSGD'
                 else:
@@ -69,7 +65,7 @@ def main(args):
                     print("***Data generation has been finished***")
                     print("****training shadow model***")
 
-            elif args.main_dir=="UMNData":
+            elif main_dir=="UMNData":
                 if args.morphology==True:
                         file_name_shadow='morphology_shadow_dataset_DPSGD_UMN'
                 else:
@@ -84,7 +80,7 @@ def main(args):
                     print("****training shadow model***")
 
         else:
-            if args.main_dir == "DukeData":
+            if main_dir == "DukeData":
 
                 if args.morphology == True:
                     file_name_shadow = 'morphology_shadow_dataset'
@@ -98,7 +94,7 @@ def main(args):
                      print("***Data generation has been finished***")
                      print("****training shadow model***")
 
-            elif args.main_dir == "UMNData":
+            elif main_dir == "UMNData":
                 if args.morphology == True:
                     file_name_shadow = 'morphology_shadow_dataset_UMN'
                 else:
@@ -160,18 +156,16 @@ def main(args):
                 print("****membership_loss****")
                 print(membership_loss(args, data, shadow_data, victim_model))
 
+                #print(' ** Type-I **')
+                #args.attacktype = 1
+                #_ = get_attack(combined_attack_data, args, victim_model, shadow_model)
+
+                #print(' ** Type-II **')
+                #args.attacktype = 2
+                #_ = get_attack(combined_attack_data, args, victim_model, shadow_model)
+
                 print(' ** Global loss **')
-                global_attack(args, shadow_data, data, victim_model, shadow_threshold)
-
-                print(' ** Type-I **')
-                args.attacktype = 1
-                _ = get_attack(combined_attack_data, args, victim_model, shadow_model)
-
-                print(' ** Type-II **')
-                args.attacktype = 2
-                _ = get_attack(combined_attack_data, args, victim_model, shadow_model)
-
-
+                global_attack(args,shadow_data,data, victim_model, shadow_threshold)
 
             elif args.patchify:
                 shadow_model, shadow_threshold = get_shadow(shadow_data, args)
@@ -192,7 +186,7 @@ def main(args):
         if args.multiple_shadow:
             print("****multiple shadow model is starting****")
 
-            data = split_and_copy(os.path.join(main_path, 'train'), os.path.join(main_path, 'val'))
+            data = split_and_copy(os.path.join(main_dir, 'train'), os.path.join(main_dir, 'val'))
             shadow_models, shadow_thresholds = get_shadow_multiple(data, args)
 
             victim_model, _ = get_victim(data, args)
@@ -218,33 +212,40 @@ def main(args):
 
         else:
             if not args.patchify:
-                data= split_and_copy(os.path.join(main_path, 'train'), os.path.join(main_path, 'val'))
+                data = split_and_copy(os.path.join(main_dir, 'train'), os.path.join(main_dir, 'val'))
                 # train victim and shadow models
                 print(" ** TRAINING VICTIM MODEL **")
                 victim_model, _ = get_victim(data, args)
-                print(" ** TRAINING SHADOW MODEL **")
-                shadow_model, shadow_threshold = get_shadow(data, args)
-                save_shaodw_thr(args,shadow_threshold)
-                print(" ** MEMBERSHIP INFERENCE ATTACK **")
-                #print("****membership_loss****")
-                #print(membership_loss(args, data, data, victim_model))
-                print(' ** Type-I **')
+                if args.using_different_shadow_models:
+                    print("**training shadow different models**")
+                    shadow_models, shadow_threshold =having_different_shadow(args, data) # I should decide about shadow_threshold
+                    print("***Shadow model has been trained***")
+                    get_attack_different_shadow(args, data, victim_model, shadow_models) # same validation,same training
 
-                #args.attacktype = 1
-                #_ = get_attack(data, args, victim_model, shadow_model)
+                else:
+                    print("one shadow model")
+                    print(" ** TRAINING SHADOW MODEL **")
+                    shadow_model, shadow_threshold = get_shadow(data, args)
+                    save_shaodw_thr(args,shadow_threshold)
+                    print(" ** MEMBERSHIP INFERENCE ATTACK **")
+                    print("****membership_loss****")
+                    print(membership_loss(args, data, data, victim_model))
 
-                #print(' ** Type-II **')
-                #args.attacktype = 2
-                #_ = get_attack(data, args, victim_model, shadow_model)
+                    print(' ** Type-I **')
+                    args.attacktype = 1
+                    attack_train_dataloader, attack_val_dataloader = prepare_data_for_get_attack(data)
+                    _ = get_attack(attack_train_dataloader,attack_val_dataloader, args, victim_model, shadow_model)
 
-                print(' ** Global loss **')
-                global_attack(args, data, data, victim_model, shadow_threshold)
+                    #print(' ** Type-II **')
+                    #args.attacktype = 2
+                    #attack_train_dataloader, attack_val_dataloader = prepare_data_for_get_attack(data)
+                    #_ = get_attack(attack_train_dataloader,attack_val_dataloader, args, victim_model, shadow_model)
 
+                    #print(' ** Global loss **')
+                    #global_attack(args, data, data, victim_model, shadow_threshold)
 
-                #print(' ** Global loss **')
-                #global_attack(data, args, victim_model, shadow_threshold)
             elif args.patchify:
-                data = split_and_copy(os.path.join(main_path, 'train'), os.path.join(main_path, 'val'))
+                data = split_and_copy(os.path.join(main_dir, 'train'), os.path.join(main_dir, 'val'))
                 # train victim and shadow models
                 print(" ** TRAINING VICTIM MODEL **")
                 victim_model, _ = get_victim(data, args)
@@ -261,6 +262,7 @@ def main(args):
                 print(' ** Type-I **')
                 args.attacktype = 1
                 get_attack_patchify(data, args, victim_model, shadow_model)
+
 
 
 if __name__ == "__main__":
@@ -280,12 +282,12 @@ if __name__ == "__main__":
     parser.add_argument("--defensetype", type=int, default=0)
     # same for victim and shadow models
     parser.add_argument("--trainsize", type=int, default=600)
-    parser.add_argument("--main_dir", type=str, default='DukeData',choices=['UMNData','DukeData'])
+    parser.add_argument("--main_dir", type=str, default='UMNData',choices=['UMNData','DukeData'])
     parser.add_argument('--pure', type=lambda x: x.lower() == 'true', default=True)
-    parser.add_argument('--batch_size', default=8 , type=int)
-    parser.add_argument('--num_iterations', default=200, type=int)
+    parser.add_argument('--batch_size', default=16 , type=int)
+    parser.add_argument('--num_iterations', default=100, type=int)
     parser.add_argument('--learning_rate', default=5e-4, type=float)
-    parser.add_argument('--n_classes', default=9, type=int)
+    parser.add_argument('--n_classes', default=2, type=int)
     parser.add_argument('--OUTPUT_CHANNELS', default=9, type=int)
     parser.add_argument('--ffc_lambda', default=0, type=float)
     parser.add_argument('--weight_decay', default=1e-8, type=float)
@@ -305,22 +307,23 @@ if __name__ == "__main__":
     parser.add_argument('--multiple_shadow', type=lambda x: x.lower() == 'true', default=False)
     parser.add_argument('--test', type=lambda x: x.lower() == 'true', default=True)
     parser.add_argument('--synthetic_data', type=lambda x: x.lower() == 'true', default=False)
-    parser.add_argument('--model_should_be_saved', type=lambda x: x.lower() == 'true', default=False)
-    parser.add_argument('--model_should_be_load', type=lambda x: x.lower() == 'true', default=False)
-
-
+    parser.add_argument('--model_should_be_saved', type=lambda x: x.lower() == 'true', default=True)
+    parser.add_argument('--model_should_be_load', type=lambda x: x.lower() == 'true', default=True)
     parser.add_argument('--mixup', type=lambda x: x.lower() == 'true', default=False)
     parser.add_argument('-data_representation', '--data_representation', type=str, default='concate',
                         help="data representation for attacks. choose 'loss' or 'concate'.")
     parser.add_argument('-num_patches', '--num_patches', default=10, type=int,
                         help='number of patches to use.')
     parser.add_argument('--patch_size', default=90, type=int, help='patch size.')
-    parser.add_argument('--epsilon', default=0.1, type=float,help='epsilon value.')
+    parser.add_argument('--epsilon', default=200, type=float,help='epsilon value.')
     parser.add_argument('--manuall', type=lambda x: x.lower() == 'true', default=False)
     parser.add_argument('--stride', default=3, type=int, help='stride')
-    parser.add_argument('--morphology', type=lambda x: x.lower() == 'true', default=False,help="morphology")
+    parser.add_argument('--morphology', type=lambda x: x.lower() == 'true',  default=False,help="morphology")
     parser.add_argument('--operation',default='open', type=str, help="close, open or both")
     parser.add_argument('--kernel_size', default=3, type=int, help="kernel size")
+    parser.add_argument('--using_different_shadow_models',type=lambda x: x.lower() == 'true', default=False, help="having different shadow models")
+    parser.add_argument('--number_shadow', default=4, type=int, help='how many shadow models.')
+
 
 
     args = parser.parse_args()
@@ -331,6 +334,7 @@ if __name__ == "__main__":
     defenses = ['No defense', 'Argmax', 'Crop-training', 'Mix-up']
     print("Defense type: {}".format(defenses[args.defensetype]))
     print("Train size: {}".format(args.trainsize))
+    print("morphology: {}".format(args.morphology))
     print(args)
     main(args)
 

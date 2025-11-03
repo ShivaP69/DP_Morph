@@ -1,8 +1,9 @@
+
 from args import *
 from data import DatasetOct
 from torch.utils.data import DataLoader
 from train import seg_train
-from attack_train import train_attack_model,train_attack_model_patchify
+from attack_train import train_attack_model,train_attack_model_patchify,test_attack_model
 from train import train_synthetic
 from torch.utils.data import ConcatDataset, Subset
 from args import OUTPUT_CHANNELS
@@ -10,7 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import Dataset
-
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 
 
 # this is a function to change target for those sample that we reserve for victim to be added for testing the shadow model
@@ -136,14 +137,14 @@ def get_victim(data, args):
             print("DPSGD is active")
             args.DPSGD = True
             victim_model = seg_train(args, victim_train_dataloader, victim_val_dataloader,counter=None,victim=True,shadow=False)
-            args.DPSGD = False
+            #args.DPSGD = False
             args.DPSGD_for_Saving_and_synthetic=True
-            print("DPSGD set to false but DPSGD_for_Saving_and_synthetic set o True")
-            assert not args.DPSGD, "Error: args.DPSGD was not properly set to False after the training!"
+            #print("DPSGD set to false but DPSGD_for_Saving_and_synthetic set to True")
+            #assert not args.DPSGD, "Error: args.DPSGD was not properly set to False after the training!"
         else:
             print("DPSGD is not active")
             victim_model = seg_train(args, victim_train_dataloader, victim_val_dataloader, counter=None, victim=True,
-                                    shadow=False,plotting=True)
+                                    shadow=False,plotting=False)
     # crop training
     """elif args.defensetype == 3:
         victim_model = train_segmentation_model_crop(args, victim_train_dataloader, victim_val_dataloader, 3*SEG_EPOCHS, SEG_LR)
@@ -181,7 +182,12 @@ def check_balance_in_dataset(dataset):
     print(f"Number of ones attack train (members = 1): {num_ones}")
     print(f"Number of zeros  attack train(members = 0): {num_zeros}")
 
-def get_attack(data, args, victim_model, shadow_model):
+
+
+def prepare_data_for_get_attack(data):
+    # first define what is victim attack paths: combination of member and non-members
+    # the test data of victim model should not considered as non-memeber in shadow (cheating)
+
 
     print(
         f"Victim Attack Paths inside get attack - Ones: {np.sum(data.victim_attack_paths['member'] == 1)}, Zeros: {np.sum(data.victim_attack_paths['member'] == 0)}")
@@ -268,10 +274,41 @@ def get_attack(data, args, victim_model, shadow_model):
     print(f"Number of ones in validation set: {num_ones_val}")
     print(f"Number of zeros in validation set: {num_zeros_val}")
 
+    return attack_train_dataloader,attack_val_dataloader
+
+def get_attack(attack_train_dataloader,attack_val_dataloader, args, victim_model, shadow_model):
     attack_model = train_attack_model(
         args, shadow_model, victim_model, attack_train_dataloader, attack_val_dataloader, ATTACK_EPOCHS, ATTACK_LR)
-
     return attack_model
+
+
+
+def get_attack_different_shadow (args,data, victim_model, shadow_models):
+    attack_models=[]
+    aggregated_prediction_validation=[]
+    print("Data Preparation")
+    attack_train_dataloader,attack_val_dataloader=prepare_data_for_get_attack(data)
+    print("Data has been prepared")
+    for i in range(len(shadow_models)):
+        print(f"*****training attack model {i+1}*****")
+        attack_model = get_attack(attack_train_dataloader,attack_val_dataloader,args, victim_model, shadow_models[i])
+        attack_models.append(attack_model) # trained attack models
+    print("""""testing the mechanism""")
+    for model in attack_models:
+        _,_, pred_labels,total_true_targets=test_attack_model(args,model, attack_val_dataloader,num_classes=args.n_classes,victim_model = victim_model, accuracy_only = False,input_channels = 1, multiple_shadow = False, layer = -1, number = 1, roc = False, plot_test = False,different_shadow=True)
+        aggregated_prediction_validation.append(pred_labels)
+
+    # for total_true_targets, the last one is enough
+    print("***total evaluation for validation data when we have more than one shadow models***")
+    stacked_batch_pred= np.stack(aggregated_prediction_validation, axis=1) # 2D array : rows: samples , columns: attack models
+    #print(f"stacked_batch_pred:{stacked_batch_pred}")
+    majority_vote_preds= np.apply_along_axis(lambda x:np.argmax(np.bincount(x.astype(int))), axis=1, arr=stacked_batch_pred)
+    a_score = round(accuracy_score(total_true_targets, majority_vote_preds), 4)
+    f_score = round(f1_score(total_true_targets, majority_vote_preds), 4)
+    print(
+        'Validation accuracy:', a_score,
+        ', F1-score:', f_score,
+    )
 
 
 def get_attack_patchify(data,args,victim_model,shadow_model):
@@ -303,6 +340,7 @@ def get_attack_multiple(data, args, victim_model, shadow_models):
         dataloaders.append(attack_val_dataloader)
     # test entire attack models
     return attack_models,dataloaders
+
 
 
 
@@ -341,3 +379,25 @@ def get_shadow_multiple(data, args):
 
 
 
+def having_different_shadow(args,data):
+    "here we train different shadow model but all with same training data"
+    shadow_models=[]
+    shadow_losses=[]
+    k=args.number_shadow # how many shadow models we want to have
+    # training and validation datasets are shared among all shadow models
+    shadow_train = DatasetOct(data.shadow_train_paths)
+    shadow_train_dataloader = DataLoader(shadow_train, batch_size=int(args.batch_size), shuffle=True)
+    shadow_val = DatasetOct(data.shadow_val_paths)
+    shadow_val_dataloader = DataLoader(shadow_val, batch_size=int(args.batch_size))
+
+    for i in range(k):
+        print(f"training {i}th shadow model")
+        print("shadow model training")
+        shadow_model, average_loss = seg_train(args, shadow_train_dataloader, shadow_val_dataloader, counter=None,
+                                               victim=False, shadow=True, plotting=True) # train each shadow model
+
+        print(f"saving shadow model {i} in shadow models list")
+        shadow_models.append(shadow_model) # save shadow models
+        shadow_losses.append(average_loss) # save loss of shadow models
+
+    return shadow_models, shadow_losses

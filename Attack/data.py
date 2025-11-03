@@ -77,7 +77,6 @@ class split_and_copy():
         mask1_train= train_mask_files[:split_index]
         mask2_train=train_mask_files[split_index:]
 
-
         # List files in val/images
         val_files = get_files(os.path.join(source_val_dir, 'images'))
         mask_val_files=get_files(os.path.join(source_val_dir, 'masks'))
@@ -113,7 +112,7 @@ class split_and_copy():
             'lbls': np.concatenate([self.shadow_train_paths['lbls'][:k], self.shadow_val_paths['lbls'][:k]]),
             'member': np.concatenate([np.ones((k)), np.zeros((k))])
         }
-        # the following codes are used for calculating loss distribution of target the model
+        # the following codes are used for calculating loss distribution of target model
         self.victim_attack_paths_member = {
             'imgs':self.victim_train_paths['imgs'],
             'lbls':self.victim_train_paths['lbls'],
@@ -124,7 +123,7 @@ class split_and_copy():
             'lbls': self.victim_val_paths['lbls'],
             'member': np.zeros(len(self.victim_val_paths['imgs']))
         }
-
+        # non-member for victim model not shadow
         self.shadow_attack_paths_non_member = {
             'imgs': np.concatenate([self.shadow_train_paths['imgs'], self.shadow_val_paths['imgs']]),
             'lbls': np.concatenate([self.shadow_train_paths['lbls'], self.shadow_val_paths['lbls']]),

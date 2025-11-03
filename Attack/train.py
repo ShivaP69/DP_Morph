@@ -13,9 +13,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License
-
+import torch.nn as nn
 import argparse
 import csv
+import sys
 import torch
 import torchvision.models as models
 from torch.profiler import profile, record_function, ProfilerActivity
@@ -241,8 +242,14 @@ def segmentation_plots(args,val_loader, model, device, model_name,multiple_shado
             axes[2].imshow(predicted_combined)
             axes[2].set_title('Predicted Mask val')
             axes[2].axis('off')
-            file_path = os.path.join(folder_name, f'{model_name}_{state}_{dataset}_{idx+1*number}.pdf')
-            plt.savefig(file_path, format='pdf', bbox_inches='tight')
+            # correct path
+            #file_path = os.path.join(folder_name, f'{model_name}_{state}_{dataset}_{idx+1*number}.pdf')
+            #plt.savefig(file_path, format='pdf', bbox_inches='tight')
+
+            # this is just temporary place to check the real impact of morphology
+            file_path=f'/home/parsar0000/oct_git/main_code/Attack/evaluate_morphology/output_results_{args.morphology}.png'
+            plt.savefig(file_path)
+            plt.close()
             #plt.show()
             batch_processed += 1
 
@@ -338,6 +345,23 @@ def visualize_batch(images, masks):
     plt.tight_layout()
     plt.show()
 
+def plot_train_test(args,training_losses,validation_losses):
+    # plot train and validation
+    epochs = len(training_losses)
+    epochs_range=range(1,epochs+1)
+    plt.plot(epochs_range, training_losses, label="training")
+    plt.plot(epochs_range, validation_losses, label="validation")
+    plt.title(f"Training and validation loss when morphology is {args.morphology}")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend(loc='best')
+    #plt.show()
+    #plt.close()
+    # this is just temporary place to check the real impact of morphology
+    file_path = f'/home/parsar0000/oct_git/main_code/Attack/evaluate_morphology/train_test_split_{args.morphology}.png'
+    plt.savefig(file_path)
+    plt.close()
+
 
 def set_seed(seed):
     torch.backends.cudnn.deterministic = True
@@ -418,15 +442,15 @@ def eval(args,val_loader, criterion, model, n_classes, dice_s=True, device="cuda
         if n_classes>1:
             label_oh = torch.nn.functional.one_hot(label, num_classes=n_classes)
             pred = model(img)
-            if args.morphology:
-                pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
+            #if args.morphology:
+            #    pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
             max_val, idx = torch.max(pred, 1) # extracts the predicted class for each pixel.
             pred_seg = idx.cpu().data.numpy()
             label_seg = label.cpu().data.numpy()
         else:
             pred=model(img)
-            if args.morphology:
-                pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
+            #if args.morphology:
+            #    pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
             label_oh= label
             #Apply sigmoid and threshold to get binary predictions
             pred = torch.sigmoid(pred)
@@ -472,6 +496,21 @@ def eval(args,val_loader, criterion, model, n_classes, dice_s=True, device="cuda
     return dice, loss, dice_all
 
 
+
+
+def remove_inplace(m):
+    for mod in m.modules():
+        if hasattr(mod, "inplace"):
+            mod.inplace = False
+
+        # Avoid common in-place layers/ops by type
+
+        if isinstance(mod, (nn.ReLU, nn.LeakyReLU, nn.PReLU, nn.ELU, nn.SiLU, nn.GELU, nn.Dropout, nn.AlphaDropout)):
+            if hasattr(mod, "inplace"):
+                mod.inplace = False
+
+
+
 def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plotting=False,multiple_shadow=False):
 
     if args.morphology:
@@ -511,7 +550,10 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
     best_test_dice = 0
     best_iter = 0
     print(f"n_classes:{n_classes}")
-    model = get_model(model_name, ratio=ratio, num_classes=n_classes).to(device)
+    if args.morphology:
+        model=get_model(model_name, ratio=ratio, num_classes=n_classes,morphology=args.morphology,operation=args.operation,kernel_size=args.kernel_size)
+    else:
+        model = get_model(model_name, ratio=ratio, num_classes=n_classes).to(device)
     print(model_name)
 
     optimizer = torch.optim.Adam(list(model.parameters()), lr=learning_rate,
@@ -549,6 +591,7 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
             data_loader=train_loader,
             noise_multiplier=noise_multiplier,
             max_grad_norm=max_grad_norm, )"""
+        remove_inplace(model) # inplaces should be False  # Always avoid in-place operations when using Opacus unless you explicitly clone tensors.
         model, optimizer, data_loader = privacy_engine.make_private_with_epsilon(
             module=model,
             optimizer=optimizer,
@@ -560,6 +603,8 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
             max_grad_norm=max_grad_norm, )
         print("DPSGD is active in the training process")
         privacy_epsilons = []
+
+
     else:
         noise_multiplier = 'None'
         max_grad_norm = 'None'
@@ -587,14 +632,14 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
 
             max_val, idx = torch.max(pred, 1)
             pred_oh = torch.nn.functional.one_hot(idx, num_classes=n_classes)
-            pred_oh = pred_oh.permute(0, 3, 1, 2)
+            #pred_oh = pred_oh.permute(0, 3, 1, 2)
             #label_oh = label_oh.permute(0, 3, 1, 2)
             """loss = criterion_seg(pred, label.squeeze(1), device=device) + args.ffc_lambda * criterion_ffc(pred_oh,
                                                                                                        label_oh)"""
             # print(pred.shape)
             # print(label.squeeze(1).shape)
-            if args.morphology:
-                pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
+            #if args.morphology: it is handled in the network structure
+            #    pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
             """if label.shape == pred.shape:
                 loss = criterion_seg(pred, label, device=device)
             else:
@@ -609,7 +654,7 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
             total_samples += img.size(0)
 
         average_loss = total_loss / total_samples  # for each epoch
-        training_losses.append(average_loss)
+        #training_losses.append(average_loss) # remove it from here to have a same size validation and train/but if you need to fully track the training loss, here it is the place to update training_losses
 
         if args.DPSGD==True:
             epsilon = privacy_engine.get_epsilon(delta)
@@ -632,12 +677,13 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
             print("Validation")
             dice, validation_loss, dice_all = eval(args,val_loader, criterion_seg, model, dice_s=True, n_classes=n_classes)
             validation_losses.append(validation_loss)
+            training_losses.append(average_loss)
             if plotting:
-             if shadow:
-                 dataset="synthetic"
-             else:
-                 dataset=args.main_dir
-             segmentation_plots(args,val_loader, model, device, model_name, multiple_shadow, DPSGD=args.DPSGD, dataset=dataset ,morphology=args.morphology,number=t,num_examples=1)
+                 if shadow:
+                     dataset="synthetic"
+                 else:
+                     dataset=args.main_dir
+                 segmentation_plots(args,val_loader, model, device, model_name, multiple_shadow, DPSGD=args.DPSGD, dataset=dataset ,morphology=args.morphology,number=t,num_examples=1)
 
             if n_classes>1:
                 validation_dice_scores.append(dice.item())
@@ -686,8 +732,16 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
     #segmentation_plots(args,val_loader, model, device, model_name, args.DPSGD, args.image_dir)
     # print("Best iteration: ", best_iter, "Best val dice: ", max_dice, "Best test dice: ", best_test_dice)
     if len (training_losses) > 0:
+      if shadow:
+          print("shadow training")
       print(f" training loss:{training_losses}")
       print(f" validation loss:{validation_losses}")
+      if not shadow: # this is used for evaluating the real performance of the model
+          dataset=args.main_dir
+          segmentation_plots(args, val_loader, model, device, model_name, multiple_shadow, DPSGD=args.DPSGD,
+                             dataset=dataset, morphology=args.morphology, number=t, num_examples=3)
+          plot_train_test(args,training_losses, validation_losses) # morph-vs-non-morph.ipynb:colab
+          #sys.exit()
 
       file_name = 'losses.txt'
       with open(file_name, 'a') as file:  # Use 'a' to append data to the file

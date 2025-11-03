@@ -4,14 +4,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
-#from collections import OrderedDict
+from collections import OrderedDict
 import torch
 import torch.nn as nn
-
+import torch
+import torch.nn as nn
+from collections import OrderedDict
 #from ffc import FFC_BN_ACT, ConcatTupleLayer
+from train import apply_kornia_morphology_multiclass
+import torch.nn.functional as F
 
 
-def get_model(model_name, in_channels=1, num_classes=1, ratio=0.5):
+def get_model(model_name, in_channels=1, num_classes=1, ratio=0.5,morphology=False,operation='None',kernel_size='None'):
     if model_name == "unet":
         model = UNet(in_channels, num_classes)
     #elif model_name == "y_net_gen":
@@ -19,19 +23,19 @@ def get_model(model_name, in_channels=1, num_classes=1, ratio=0.5):
     #elif model_name == "y_net_gen_ffc":
         #model = YNet_general(in_channels, num_classes, ffc=True, ratio_in=ratio)
     elif model_name == 'UNetOrg':
-        model = UNetOrg(in_channels, num_classes)
+        model = UNetOrg(in_channels, num_classes,morphology=morphology,operation=operation,kernel_size=kernel_size)
     elif model_name == 'ReLayNet':
-        model = ReLayNet(in_channels, num_classes)
+        model = ReLayNet(in_channels, num_classes,morphology=morphology,operation=operation,kernel_size=kernel_size)
     elif model_name == 'LFUNet':
-        model = LFUNet(in_channels, num_classes)
+        model = LFUNet(in_channels, num_classes,morphology=morphology,operation=operation,kernel_size=kernel_size)
     elif model_name == 'FCN8s':
-        model = FCN8s(in_channels, num_classes)
+        model = FCN8s(in_channels, num_classes,morphology=morphology,operation=operation,kernel_size=kernel_size)
     elif model_name == 'NestedUNet':
-        model = NestedUNet(in_channels, num_classes)
+        model = NestedUNet(in_channels, num_classes,morphology=morphology,operation=operation,kernel_size=kernel_size)
     elif model_name == 'SimplifiedFCN8s':
-        model= SimplifiedFCN8s(in_channels, num_classes)
+        model= SimplifiedFCN8s(in_channels, num_classes,morphology=morphology,operation=operation,kernel_size=kernel_size)
     elif model_name == 'ConvNet':
-        model = ConvNet(in_channels, num_classes)
+        model = ConvNet(in_channels, num_classes,morphology=morphology,operation=operation,kernel_size=kernel_size)
 
 
     else:
@@ -102,13 +106,14 @@ class VGGBlock(nn.Module):
 """
 
 class NestedUNet(nn.Module):
-    def __init__(self, input_channels, num_classes, deep_supervision=False, **kwargs):
+    def __init__(self, input_channels, num_classes, deep_supervision=False,morphology=False,operation='None',kernel_size='None', **kwargs):
         super().__init__()
 
         nb_filter = [32, 64, 128, 256, 512]
-
+        self.morphology=morphology
         self.deep_supervision = deep_supervision
-
+        self.kernel_size= kernel_size
+        self.operation = operation
         self.pool = nn.MaxPool2d(2, 2)
         self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
 
@@ -137,6 +142,7 @@ class NestedUNet(nn.Module):
             self.final2 = nn.Conv2d(nb_filter[0], num_classes, kernel_size=1)
             self.final3 = nn.Conv2d(nb_filter[0], num_classes, kernel_size=1)
             self.final4 = nn.Conv2d(nb_filter[0], num_classes, kernel_size=1)
+
         else:
             self.final = nn.Conv2d(nb_filter[0], num_classes, kernel_size=1)
 
@@ -161,27 +167,34 @@ class NestedUNet(nn.Module):
         x0_4 = self.conv0_4(torch.cat([x0_0, x0_1, x0_2, x0_3, self.up(x1_3)], 1))
 
         if self.deep_supervision:
-            output1 = self.final1(x0_1)
-            output2 = self.final2(x0_2)
-            output3 = self.final3(x0_3)
-            output4 = self.final4(x0_4)
-            return [output1, output2, output3, output4]
+            out1 = self.final1(x0_1)
+            out2 = self.final2(x0_2)
+            out3 = self.final3(x0_3)
+            out4 = self.final4(x0_4)
 
+            if self.morphology:
+                out1 = apply_kornia_morphology_multiclass(out1, operation=self.operation, kernel_size=self.kernel_size)
+                out2 = apply_kornia_morphology_multiclass(out2, operation=self.operation, kernel_size=self.kernel_size)
+                out3 = apply_kornia_morphology_multiclass(out3, operation=self.operation, kernel_size=self.kernel_size)
+                out4 = apply_kornia_morphology_multiclass(out4, operation=self.operation, kernel_size=self.kernel_size)
+
+            return [out1, out2, out3, out4]
         else:
-            output = self.final(x0_4)
-            return output
+            out = self.final(x0_4)
+            if self.morphology:
+                out = apply_kornia_morphology_multiclass(out, operation=self.operation, kernel_size=self.kernel_size)
+            return out
 
 
 
 
-import torch
-import torch.nn as nn
-from collections import OrderedDict
 
 class UNet(nn.Module):
-    def __init__(self, in_channels=1, out_channels=1, init_features=32):
+    def __init__(self, in_channels=1, out_channels=1, init_features=32,morphology=False,operation='None',kernel_size='None', **kwargs):
         super(UNet, self).__init__()
-
+        self.morphology = morphology
+        self.kernel_size = kernel_size
+        self.operation = operation
         features = init_features
         self.encoder1 = self._block(in_channels, features, name="enc1")
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
@@ -240,7 +253,11 @@ class UNet(nn.Module):
         dec1 = self.upconv1(dec2)
         dec1 = torch.cat((dec1, enc1), dim=1)
         dec1 = self.decoder1(dec1)
-        return self.conv(dec1)
+        output=self.conv(dec1)
+        if self.morphology:
+            output = apply_kornia_morphology_multiclass(output, operation=self.operation, kernel_size=self.kernel_size)
+
+        return output
         #return self.activation(self.conv(dec1))
 
     @staticmethod
@@ -377,9 +394,12 @@ class UNet(nn.Module):
         )
 """
 class BasicUNet(nn.Module):
-    def __init__(self, in_channels=3, out_channels=1, init_features=64, conv_ker=(3, 3)):
+    def __init__(self, in_channels=3, out_channels=1, init_features=64, conv_ker=(3, 3),morphology=False,operation='None',kernel_size='None', **kwargs):
         super(BasicUNet, self).__init__()
 
+        self.morphology = morphology
+        self.kernel_size = kernel_size
+        self.operation = operation
         conv_pad = (int((conv_ker[0] - 1) / 2), int((conv_ker[1] - 1) / 2))
         features = init_features
         self.encoder1 = BasicUNet._block(in_channels, features, name="enc1", conv_kernel=conv_ker, conv_pad=conv_pad)
@@ -446,7 +466,11 @@ class BasicUNet(nn.Module):
         enc1, pool1, indices1, enc2, pool2, indices2, enc3, pool3, indices3, enc4, pool4, indices4, bottleneck = BasicUNet.forward_encoder(
             self, x)
         dec1 = BasicUNet.forward_decoder(self, enc1, enc2, enc3, enc4, bottleneck)
-        return self.softmax(self.conv(dec1))
+        output=self.softmax(self.conv(dec1))
+        if self.morphology:
+            output = apply_kornia_morphology_multiclass(output, operation=self.operation, kernel_size=self.kernel_size)
+
+        return output
 
     @staticmethod
     def _block(in_channels, features, name, conv_kernel, conv_pad, repetitions=2):
@@ -475,7 +499,7 @@ class UNetOrg(BasicUNet):
 # A. Roy, et al., “ReLayNet: retinal layer and fluid segmentation of macular optical coherence tomography using
 # fully convolutional networks,” Biomed. Opt. Express, vol. 8, no. 8, pp. 3627–3642, Aug. 2017.
 class ReLayNet(BasicUNet):
-    def __init__(self, in_channels=3, num_classes=9, features=64, kernel=(7, 3)):
+    def __init__(self, in_channels=3, num_classes=9, features=64, kernel=(7, 3),morphology=False,operation='None',kernel_size='None'):
         super().__init__(in_channels=in_channels, out_channels=num_classes, init_features=features, conv_ker=kernel)
 
         conv_pad = (int((kernel[0] - 1) / 2), int((kernel[1] - 1) / 2))
@@ -529,7 +553,8 @@ class ReLayNet(BasicUNet):
                                                                                                                    x)
         dec1 = ReLayNet.forward_decoder(self, enc1, pool1, indices1, enc2, pool2, indices2, enc3, pool3, indices3,
                                         bottleneck)
-        return self.softmax(self.conv(dec1))
+        return (
+            self.softmax(self.conv(dec1)))
 
 
 # LF-UNet - dual network combining UNet and FCN
@@ -537,9 +562,11 @@ class ReLayNet(BasicUNet):
 # Coherence Tomography Incorporating Relative Positional Map,” in Proceedings of the Third
 # Conference on Medical Imaging with Deep Learning, vol. 121, pp. 493–502, 2020.
 class LFUNet(BasicUNet):
-    def __init__(self, in_channels=3, num_classes=10, features=64, kernel=(7, 3)):
+    def __init__(self, in_channels=3, num_classes=10, features=64, kernel=(7, 3),morphology=False,operation='None',kernel_size='None'):
         super().__init__(in_channels=in_channels, out_channels=num_classes, init_features=features, conv_ker=kernel)
-
+        self.morphology = morphology
+        self.kernel_size = kernel_size
+        self.operation = operation
         conv_pad = (int((kernel[0] - 1) / 2), int((kernel[1] - 1) / 2))
 
         self.upconv4a = nn.ConvTranspose2d(features * 16, features * 4, kernel_size=(2, 2), stride=2)
@@ -578,20 +605,24 @@ class LFUNet(BasicUNet):
         dil6 = self.convdil6(fcn)
         dil4 = self.convdil4(fcn)
 
-        last = torch.cat((dil8, dil6, dil4), dim=1)
-        drop = self.dropout(last)
-
+        cat_layer = torch.cat((dil8, dil6, dil4), dim=1)
+        drop = self.dropout(cat_layer)
         # return self.conv(drop)
         #return self.softmax(self.conv(drop))
-        return self.conv(drop)
+        output=self.conv(drop)
+        if self.morphology:
+            output = apply_kornia_morphology_multiclass(output, operation=self.operation, kernel_size=self.kernel_size)
+        return output
 
 
 class FCN8s(nn.Module):
 
-    def __init__(self, in_channels=3, num_classes=4, features=64, kernel=(3, 3)):
+    def __init__(self, in_channels=3, num_classes=4, features=64, kernel=(3, 3),morphology=False,operation='None',kernel_size='None', **kwargs):
         super().__init__()
         conv_pad = (int((kernel[0] - 1) / 2), int((kernel[1] - 1) / 2))
-
+        self.morphology = morphology
+        self.kernel_size = kernel_size
+        self.operation = operation
         # conv1
         self.conv1_1 = nn.Conv2d(in_channels=in_channels, out_channels=features, kernel_size=kernel, padding=(100, 100))
         self.relu1_1 = nn.ReLU(inplace=False)
@@ -682,6 +713,8 @@ class FCN8s(nn.Module):
 
         final = self.upscore_final(upscore_pool4 + score_pool3c)
         output = final[:, :, 31:(31 + x.size()[2]), 31:(31 + x.size()[3])].contiguous()
+        if self.morphology:
+            output = apply_kornia_morphology_multiclass(output, operation=self.operation, kernel_size=self.kernel_size)
 
         return output
 
@@ -800,10 +833,10 @@ class FCN8s(nn.Module):
 
         return output
 """
-import torch.nn.functional as F
+
 
 class SimplifiedFCN8s(nn.Module):
-    def __init__(self, in_channels=3, num_classes=4, features=64, kernel=(3, 3)):
+    def __init__(self, in_channels=3, num_classes=4, features=64, kernel=(3, 3),morphology=False,operation='None',kernel_size='None', **kwargs):
         super().__init__()
         conv_pad = (int((kernel[0] - 1) / 2), int((kernel[1] - 1) / 2))
 
@@ -853,6 +886,9 @@ class SimplifiedFCN8s(nn.Module):
         upscore_pool4 = self.upscore_pool4(conv_fc)
         final = self.upscore_final(upscore_pool4)
         output = F.interpolate(final, size=(224, 224), mode='bilinear', align_corners=False)
+        if self.morphology:
+            output = apply_kornia_morphology_multiclass(output, operation=self.operation, kernel_size=self.kernel_size)
+
         return output
 """
 class YNet_general(nn.Module):
@@ -1139,9 +1175,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 class ConvNet(nn.Module):
-    def __init__(self, in_channels=1, out_channels=9, init_features=32):
+    def __init__(self, in_channels=1, out_channels=9, init_features=32,morphology=False,operation='None',kernel_size='None', **kwargs):
         super(ConvNet, self).__init__()
-
+        self.morphology = morphology
+        self.kernel_size = kernel_size
+        self.operation = operation
         self.conv1 = nn.Conv2d(in_channels, 8, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(8, 16, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
@@ -1174,6 +1212,8 @@ class ConvNet(nn.Module):
 
         x = self.upsample(x)  # Upsample to 112x112
         x = self.upsample_final(x)  # Upsample to 224x224
+        if self.morphology:
+            x = apply_kornia_morphology_multiclass(x, operation=self.operation, kernel_size=self.kernel_size)
 
         return x
 
@@ -1181,9 +1221,11 @@ class ConvNet(nn.Module):
 
 
 class UNet_VGG(nn.Module):
-    def __init__(self, in_channels=1, out_channels=1, init_features=32):
+    def __init__(self, in_channels=1, out_channels=1, init_features=32,morphology=False,operation='None',kernel_size='None', **kwargs):
         super(UNet_VGG, self).__init__()
-
+        self.morphology = morphology
+        self.kernel_size = kernel_size
+        self.operation = operation
         features = init_features
         self.encoder1 = self._block(in_channels, features, name="enc1")
         self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
@@ -1242,8 +1284,11 @@ class UNet_VGG(nn.Module):
         dec1 = self.upconv1(dec2)
         dec1 = torch.cat((dec1, enc1), dim=1)
         dec1 = self.decoder1(dec1)
+        output =self.activation(self.conv(dec1))
+        if self.morphology:
+            output = apply_kornia_morphology_multiclass(output, operation=self.operation, kernel_size=self.kernel_size)
 
-        return self.activation(self.conv(dec1))
+        return output
 
     @staticmethod
     def _block(in_channels, features, name):

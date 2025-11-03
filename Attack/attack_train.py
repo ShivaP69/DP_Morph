@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.metrics import roc_curve, auc
 import matplotlib.pyplot as plt
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+
 import torch.nn as nn
 from losses import CrossEntropyLoss2d
 import os
@@ -37,7 +38,6 @@ def plot_shadow_prediction(pred,labels,target,save=True, save_dir='plots',j=0):
         plt.imshow(label_img, cmap='tab10')
         #plt.show()
         plt.tight_layout()
-
         if save:
             plt.savefig(f"{save_dir}/prediction_{i}_{j}.png")
             plt.close()
@@ -216,8 +216,6 @@ class Attacker(nn.Module):
                                        nn.Linear(hidden_dim, hidden_dim), nn.Tanh(),
                                        nn.Linear(hidden_dim, hidden_dim), nn.Tanh(),
                                        nn.Linear(hidden_dim, 1))
-
-
     def forward(self, x):
         out = self.attacker(x)
         #return torch.sigmoid(out)
@@ -257,134 +255,29 @@ def SLM(pred, label, ignore=255):
 
     return loss
 
-"""def train_attack_model_Binary(args, shadow_model, victim_model, dataloader, val_dataloader, epochs, lr, multiple_shadow=False,
-                       layer=-1):
-    from args import OUTPUT_CHANNELS
-    if multiple_shadow:
-        print("multiple shadow")
-        n_classes = 1
-        OUTPUT_CHANNELS = 1
-    else:
-        n_classes = args.n_classes
-        OUTPUT_CHANNELS = OUTPUT_CHANNELS
+def normalize_labels_for_onehot(labels):
+    """
+    Ensure labels is integer tensor with shape [B, H, W] suitable for F.one_hot(..., num_classes).
+    Handles common incoming shapes like [B, H, W], [B,1,H,W], or [B,H,W,1].
+    """
+    # move to CPU? keep on device for speed; we operate on same device
+    # Remove any singleton channel dimension if present
+    if labels.dim() == 4 and labels.size(1) == 1:
+        labels = labels.squeeze(1)       # [B,1,H,W] -> [B,H,W]
+    elif labels.dim() == 4 and labels.size(-1) == 1:
+        # [B,H,W,1] -> [B,H,W]
+        labels = labels.squeeze(-1)
+    elif labels.dim() == 5:
+        # Unexpected 5D: try to squeeze all singleton dims until 3D or raise
+        labels = labels.squeeze()
+    # final sanity: ensure we have [B,H,W]
+    if labels.dim() != 3:
+        raise RuntimeError(f"normalize_labels_for_onehot: expected labels with 3 dims [B,H,W], got {labels.shape}")
+    return labels.long()
 
-    if args.defensetype == 2:
-        # Type-I attack
-        if args.attacktype == 1:
-            ATTACK_INPUT_CHANNELS = 1
-        # Type-II attack
-        else:
-            ATTACK_INPUT_CHANNELS = 2
-    else:
-        # Type-I attack
-        if args.attacktype == 1:
-            ATTACK_INPUT_CHANNELS = OUTPUT_CHANNELS
-        # Type-II attack
-        else:
-            ATTACK_INPUT_CHANNELS = OUTPUT_CHANNELS * 2
 
-    # Initialize BinaryClassifier with the correct input channels
-    if model=="Binary_Classifier":
-        model = BinaryClassifier(ATTACK_INPUT_CHANNELS)
-        criterion = nn.BCELoss()
-    elif model== "VGG":
-        model=VGG(ATTACK_INPUT_CHANNELS)
-        criterion = nn.BCEWithLogitsLoss()
-    elif model=="resnet":
-        model=resnet(ATTACK_INPUT_CHANNELS)
-        criterion = nn.BCELoss()
-         
-    model.to(device)
 
-    opt = torch.optim.NAdam(model.parameters(), lr=lr, betas=(0.9, 0.999))
-    q_accuracy = []
-    q_f1 = []
-
-    for epoch in range(epochs):
-        pred_labels = np.array([])
-        true_labels = np.array([])
-        num_ones = 0
-        num_zeros = 0
-        model.train()
-
-        for data, labels, targets in dataloader:
-            # Move data and targets to device
-            data, labels, targets = data.to(device), labels.to(device), targets.to(device)
-            num_ones += torch.sum(targets == 1).item()  # Count number of 1s
-            num_zeros += torch.sum(targets == 0).item()  # Count number of 0s
-
-            opt.zero_grad()
-            with torch.no_grad():
-                pred = shadow_model(data.to(device))
-
-            if args.defensetype == 2:
-                pred = torch.argmax(pred, 1, keepdim=True)
-
-            if args.attacktype == 2:
-                if not multiple_shadow and args.defensetype != 2:
-                    labels = nn.functional.one_hot(labels, n_classes).to(device)
-
-                cat = labels.view(data.shape[0], pred.shape[1], data.shape[2], data.shape[3]).float().to(device)
-                s_output = torch.concat((pred, cat), dim=1).to(device)
-            else:
-                s_output = pred.to(device)
-
-            # Forward pass
-            print(f"s_output device: {s_output.float().device}")
-
-            print("model device", next(model.parameters()).device)
-
-            output = model(s_output.float())
-            loss = criterion(output, targets.float().view(len(targets), 1))
-            loss.backward()
-            opt.step()
-
-            pred_l = output.float().round().view(data.shape[0]).detach().cpu().numpy()
-            true_l = targets.float().view(data.shape[0]).detach().cpu().numpy()
-
-            pred_labels = np.concatenate((pred_labels, pred_l))
-            true_labels = np.concatenate((true_labels, true_l))
-
-        print(
-            'Training accuracy:', round(accuracy_score(true_labels, pred_labels), 4),
-            ', F1-score:', round(f1_score(true_labels, pred_labels), 4),
-        )
-
-        if not multiple_shadow:
-            print("#######Testing#######")
-            res = test_attack_model(args, model, val_dataloader, n_classes, victim_model=victim_model,
-                                    input_channels=ATTACK_INPUT_CHANNELS, multiple_shadow=multiple_shadow, layer=layer,
-                                    number=epoch, roc=False, plot_test=True)
-
-        else:
-
-            res = test_attack_model_multiple(args, [model], [val_dataloader], num_classes=1, victim_model=victim_model,
-                                             roc=False)
-
-        if epoch >= epochs - 10:
-            q_accuracy.append(res[0])
-            q_f1.append(res[1])
-
-        print(f"Epoch {epoch + 1}: num_ones: {num_ones}, num_zeros: {num_zeros}")
-
-    # at the end
-    if not multiple_shadow:
-        test_attack_model(args, model, val_dataloader, n_classes, victim_model=victim_model,
-                          input_channels=ATTACK_INPUT_CHANNELS, multiple_shadow=multiple_shadow, layer=layer,
-                          number=epoch, roc=True,
-                          plot_test=False)  # at the end so I put epoch, because the last results is the one for the last epoch
-
-    print('\n\nLast 10 epochs testing averages: accuracy: {}, F1-score: {}'.format(
-        round(np.mean(q_accuracy), 4),
-        round(np.mean(q_f1), 4),
-    ))
-    print(f"num_ones:{num_ones}")
-    print(f"num_zeros:{num_zeros}")
-    return model
-
-"""
-
-def train_attack_model(args, shadow_model, victim_model, dataloader, val_dataloader, epochs, lr,multiple_shadow=False,layer=-1,model_name='VGG'):
+def train_attack_model(args, shadow_model, victim_model, dataloader, val_dataloader, epochs, lr,multiple_shadow=False,layer=-1,model_name='Binary_Classifier'):
     # argmax defense
     from args import OUTPUT_CHANNELS
     if multiple_shadow:
@@ -412,24 +305,25 @@ def train_attack_model(args, shadow_model, victim_model, dataloader, val_dataloa
             ATTACK_INPUT_CHANNELS = OUTPUT_CHANNELS
         # Type-II attack
         else:
-            ATTACK_INPUT_CHANNELS = OUTPUT_CHANNELS * 2  # label and pred
-
+            ATTACK_INPUT_CHANNELS = OUTPUT_CHANNELS * 2  # label and predco
+    print(f"size input channels:{ATTACK_INPUT_CHANNELS}")
     #  change BCEloss to BCEWithLogitsLoss(): to have consistent structure for all models and de-activate sigmoid layers for all models
     if model_name=="Binary_Classifier":
         model = BinaryClassifier(ATTACK_INPUT_CHANNELS)
-        criterion = nn.BCEWithLogitsLoss()()
+        criterion = nn.BCEWithLogitsLoss()
+
     elif model_name== "VGG":
         model=VGG(ATTACK_INPUT_CHANNELS)
         criterion = nn.BCEWithLogitsLoss()
     elif model_name=="resnet":
         model=resnet(ATTACK_INPUT_CHANNELS)
-        criterion = nn.BCEWithLogitsLoss()()
+        criterion = nn.BCEWithLogitsLoss()
     elif model_name=='attacker':
         model = Attacker(input_dim=ATTACK_INPUT_CHANNELS, hidden_dim=128)
         criterion = nn.BCEWithLogitsLoss()
     model.to(device)
 
-    opt = torch.optim.NAdam(model.parameters(), lr=lr, betas=(0.9, 0.999))
+    opt = torch.optim.NAdam(model.parameters(), lr=lr, betas=(0.9, 0.999), weight_decay=1e-4)
 
     q_accuracy = []
     q_f1 = []
@@ -453,9 +347,9 @@ def train_attack_model(args, shadow_model, victim_model, dataloader, val_dataloa
             opt.zero_grad()
             with torch.no_grad():
                 pred = shadow_model(data)
-                # in this implementation, morphology is not part of the model so we should apply it manually
-                if args.morphology:
-                   pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
+                # in this implementation, morphology is not part of the model so we should apply it manually: we do no need it here if morphology was not part of the post processing
+                """if args.morphology:
+                   pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)"""
                 # what is pred?
                 #print(f"shape pred of shadow model is {pred.shape}")
                 #print(f"shape labels {labels.shape}")
@@ -465,24 +359,31 @@ def train_attack_model(args, shadow_model, victim_model, dataloader, val_dataloa
             # argmax defense
             if args.defensetype == 2:
                 pred = torch.argmax(pred, 1, keepdim=True)
+                labels = labels.float().unsqueeze(1)
 
-            # Type-II attack
+                # Type-II attack
             if args.attacktype == 2:
                 # non-argmax defense
                 if multiple_shadow==False:
                     if args.defensetype != 2:
-                        labels = nn.functional.one_hot(labels, n_classes)
+                        print(f"label shape before normalize:{labels.shape}")
+                        pred = F.softmax(pred, dim=1)
+                        labels_int=normalize_labels_for_onehot(labels)
+                        print(f"label shape after normalize:{labels_int.shape}")
+                        labels = nn.functional.one_hot(labels_int, n_classes).permute(0,3,1,2).float() # one_hot: [B, H, W] -> [B, H, W, C]; permute to [B, C, H, W]
+                        print(f"label shape after one-hot:{labels.shape}")
 
                 cat = labels.view(data.shape[0], pred.shape[1], data.shape[2], data.shape[3]).float()
+                print(f"label shape after view:{cat.shape}")
                 #print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-
                 #print(f"difference between cat and pred: {cat-pred}")
-
-                s_output = torch.concat((pred, cat), dim=1)
+                s_output = torch.concat([pred, cat], dim=1)
+                print(f"s_output shape:{s_output.shape}")
             else:
                 s_output = pred
             #print(f"n_classes:{n_classes}")
             #print(f"S_output:{s_output}")
+            s_output = F.avg_pool2d(s_output, kernel_size=8)
             output = model(s_output.float())
             loss = criterion(output.float(), targets.float().view(len(targets), 1))
             loss.backward()
@@ -522,7 +423,7 @@ def train_attack_model(args, shadow_model, victim_model, dataloader, val_dataloa
 
     # at the end
     if not multiple_shadow:
-         test_attack_model(args, model, val_dataloader, n_classes, victim_model=victim_model,
+          test_attack_model(args, model, val_dataloader, n_classes, victim_model=victim_model,
                           input_channels=ATTACK_INPUT_CHANNELS, multiple_shadow=multiple_shadow, layer=layer,number=epoch, roc=True,plot_test=False) # at the end so I put epoch, because the last results is the one for the last epoch
 
 
@@ -532,168 +433,12 @@ def train_attack_model(args, shadow_model, victim_model, dataloader, val_dataloa
     ))
     print(f"num_ones for training:{num_ones}")
     print(f"num_zeros for training:{num_zeros}")
+
     return model
 
-
-"""
-def train_attack_model_res(args, shadow_model, victim_model, dataloader, val_dataloader, epochs, lr, multiple_shadow=False, layer=-1):
-
-    # argmax defense
-    from args import OUTPUT_CHANNELS
-    if multiple_shadow:
-        print("multiple shadow")
-        n_classes = 1
-        OUTPUT_CHANNELS = 1
-    else:
-        n_classes = args.n_classes
-        OUTPUT_CHANNELS = OUTPUT_CHANNELS
-
-    if args.defensetype == 2:
-        # Type-I attack
-        if args.attacktype == 1:
-            ATTACK_INPUT_CHANNELS = 1
-        # Type-II attack
-        else:
-            ATTACK_INPUT_CHANNELS = 2
-    else:
-        # non argmax defense
-        if args.attacktype == 1:
-            ATTACK_INPUT_CHANNELS = OUTPUT_CHANNELS
-        # Type-II attack
-        else:
-            ATTACK_INPUT_CHANNELS = OUTPUT_CHANNELS * 2  # label and pred
-
-    # Load ResNet-50 model
-    model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-    #model = models.resnet50(weights=None)
-    # Modify the first layer to accept ATTACK_INPUT_CHANNELS
-    model.conv1 = nn.Conv2d(ATTACK_INPUT_CHANNELS, 64, kernel_size=7, stride=2, padding=3, bias=False)
-
-    # Modify the classifier to output a single probability
-    num_ftrs = model.fc.in_features
-    model.fc = nn.Sequential(
-        nn.Linear(num_ftrs, 512),
-        nn.ReLU(),
-        #nn.Dropout(0.5),
-        nn.Linear(512, 1),
-        nn.Sigmoid()
-    )
-    model.to(device)
-
-    opt = torch.optim.NAdam(model.parameters(), lr=lr, betas=(0.9, 0.99))
-    criterion = nn.BCELoss()
-
-    q_accuracy = []
-    q_f1 = []
-
-    for epoch in range(epochs):
-        total_loss=[]
-        if epoch > 0:
-            torch.cuda.empty_cache()
-
-        pred_labels = np.array([])
-        true_labels = np.array([])
-        num_ones=0
-        num_zeros=0
-        model.train()
-        print(' -- Starting training epoch {} --'.format(epoch + 1))
-
-        for data, labels, targets in dataloader:
-
-            data, labels, targets = data.to(device), labels.to(device), targets.to(device)
-            num_ones+=torch.sum(targets == 1).item()  # Count number of 1s
-            num_zeros+=torch.sum(targets == 0).item()  # Count number of 0s
-
-            opt.zero_grad()
-            with torch.no_grad():
-                pred = shadow_model(data)
-            # mixup
-            if args.mixup:
-                lam = np.random.beta(0.4, 0.4)
-                pred = mixup_data(pred, lam)
-
-                # One-hot encode the labels
-                one_hot_labels = F.one_hot(labels, num_classes=n_classes).float()
-
-                # Check the shape of one_hot_labels for debugging
-                print(f"one_hot_labels shape: {one_hot_labels.shape}")
-
-                # Reshape the one-hot labels to match the dimensions of 'pred'
-                # Input shape is [batch_size, 1, height, width, num_classes]
-                # Reshape to [batch_size, num_classes, height, width]
-                one_hot_labels = one_hot_labels.permute(0, 4, 1, 2, 3).squeeze(2)
-
-                print(f"Adjusted one_hot_labels shape: {one_hot_labels.shape}")
-
-                # Concatenate mixed predictions with one-hot encoded labels
-                s_output = torch.cat((pred, one_hot_labels), dim=1)
-
-            else:
-                # argmax defense
-                if args.defensetype == 2:
-                    pred = torch.argmax(pred, 1, keepdim=True)
-
-                # Type-II attack
-                if args.attacktype == 2:
-                    # non-argmax defense
-                    if not multiple_shadow and args.defensetype != 2:
-                        labels = nn.functional.one_hot(labels, n_classes)
-
-                    cat = labels.view(data.shape[0], pred.shape[1], data.shape[2], data.shape[3]).float()
-                    s_output = torch.concat((pred, cat), dim=1)
-                else:
-                    s_output = pred
-
-            #print(f"n_classes: {n_classes}")
-            #print(f"S_output: {s_output.shape}")
-            output = model(s_output.float())
-            loss = criterion(output.float(), targets.float().view(len(targets), 1))
-            loss.backward()
-            opt.step()
-
-            pred_l = output.float().round().view(data.shape[0]).detach().cpu().numpy()
-            true_l = targets.float().view(data.shape[0]).detach().cpu().numpy()
-            # at the end of each batch
-            print('Training accuracy:', round(accuracy_score(true_l, pred_l), 4),
-                  ', F1-score:', round(f1_score(true_l, pred_l), 4))
-            total_loss.append(loss.item())
-            pred_labels = np.concatenate((pred_labels, pred_l))
-            true_labels = np.concatenate((true_labels, true_l))
-
-        # at the end of each epoch
-        print('Training accuracy:', round(accuracy_score(true_labels, pred_labels), 4),
-              ', F1-score:', round(f1_score(true_labels, pred_labels), 4))
-        print(f"total_loss: {sum(total_loss) / len(total_loss)}")
-        if not multiple_shadow:
-            print("#######Testing#######")
-            res = test_attack_model(args, model, val_dataloader, n_classes, victim_model=victim_model,
-                                    input_channels=ATTACK_INPUT_CHANNELS, multiple_shadow=multiple_shadow, layer=layer, number=epoch,roc=False,plot_test=True)
-        else:
-            res = test_attack_model_multiple(args, [model], [val_dataloader], num_classes=1, victim_model=victim_model, roc=False)
-
-        if epoch >= epochs - 10:
-            q_accuracy.append(res[0])
-            q_f1.append(res[1])
-
-    # at the end
-    if not multiple_shadow:
-         test_attack_model(args, model, val_dataloader, n_classes, victim_model=victim_model,
-                          input_channels=ATTACK_INPUT_CHANNELS, multiple_shadow=multiple_shadow, layer=layer,number=epoch, roc=True,plot_test=False) # at the end so I put epoch, because the last results is the one for the last epoch
-
-    print('\n\nLast 10 epochs testing averages: accuracy: {}, F1-score: {}'.format(
-        round(np.mean(q_accuracy), 4),
-        round(np.mean(q_f1), 4)
-    ))
-    print(f"num_ones:{num_ones}")
-    print(f"num_zeros:{num_zeros}")
-    return model
-
-
-
-"""
 
 def test_attack_model(args, model, dataloader, num_classes, shadow_model=None, victim_model=None, accuracy_only=False,
-                      input_channels=1,multiple_shadow=False,layer=-1,number=1,roc=False,plot_test=False):
+                      input_channels=1,multiple_shadow=False,layer=-1,number=1,roc=False,plot_test=False, different_shadow=False):
     pred_labels = np.array([])
     true_labels = np.array([])
     pred_labels_roc=np.array([])
@@ -707,14 +452,14 @@ def test_attack_model(args, model, dataloader, num_classes, shadow_model=None, v
         with torch.no_grad():
             if shadow_model == None:
                 pred = victim_model(data)
-                if args.morphology:
-                    pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
+                #if args.morphology:
+                #    pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
                 """if multiple_shadow:
                     pred=pred[:,layer,:,:]"""
             else:
                 pred = shadow_model(data)
-                if args.morphology:
-                    pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
+                #if args.morphology:
+                #    pred = apply_kornia_morphology_multiclass(pred, operation=args.operation, kernel_size=args.kernel_size)
             if plot_test:
                 print("%%%%%%%%%%%This is Working%%%%%%%%%")
                 if args.morphology:
@@ -750,13 +495,14 @@ def test_attack_model(args, model, dataloader, num_classes, shadow_model=None, v
             if args.attacktype == 2:
                 # non-argmax defense
                 if args.defensetype != 2:
-                    labels = nn.functional.one_hot(labels, num_classes=num_classes)
+                    labels_int = normalize_labels_for_onehot(labels)
+                    labels = nn.functional.one_hot(labels_int, num_classes=num_classes).permute(0,3,1,2).float()
 
                 cat = labels.view(data.shape[0], pred.shape[1], data.shape[2], data.shape[3]).float()
                 s_output = torch.concat((pred, cat), dim=1)
             else:
                 s_output = pred
-
+        s_output = F.avg_pool2d(s_output, kernel_size=8)
         output = model(s_output.float())
         loss = criterion(output.float(), targets.float().view(len(targets), 1))
 
@@ -818,6 +564,8 @@ def test_attack_model(args, model, dataloader, num_classes, shadow_model=None, v
         if not os.path.exists(save_curves):
             os.makedirs(save_curves)
         plt.savefig(f"{save_curves}/roc_current_time.png")
+    if different_shadow:
+        return a_score, f_score, pred_labels,true_labels
 
     return a_score, f_score
 
@@ -845,7 +593,7 @@ class BinaryClassifier(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.5),
             nn.Linear(128, 1),
-            nn.Sigmoid()
+            #nn.Sigmoid()
         )
         self.fc = self.fc.to(x.device)
 
@@ -895,8 +643,6 @@ def modify_model(base_model, input_channels):
         )
     elif base_model == 'custom':
         base_model= BinaryClassifier(input_channels)
-
-
 
     return base_model
 
@@ -1385,5 +1131,21 @@ def test_attack_model_multiple(args, attack_models, dataloaders, num_classes, sh
         plt.show()
 
     return a_score, f_score
+
+
+
+def having_multi_shadows(args, attack_models, dataloader):
+    """
+    inputs:
+        trained attack models (k numbers, for example)
+        test dataloader : same for all models (train was also the same)
+
+    Returns:
+        final prediction
+    """
+    # iterate over attack models
+    # each make a fina prediction for the samples (same as normal test) by test_attack_model
+    # keep the prediction of each model
+    # use majority vote to output the final prediction
 
 
