@@ -592,7 +592,7 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
             noise_multiplier=noise_multiplier,
             max_grad_norm=max_grad_norm, )"""
         remove_inplace(model) # inplaces should be False  # Always avoid in-place operations when using Opacus unless you explicitly clone tensors.
-        model, optimizer, data_loader = privacy_engine.make_private_with_epsilon(
+        model, optimizer, train_loader = privacy_engine.make_private_with_epsilon(
             module=model,
             optimizer=optimizer,
             data_loader=train_loader,
@@ -711,7 +711,7 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
             best_test_loss= validation_loss
             consecutive_epochs_without_improvement = 0  # reset
         else:
-            consecutive_epochs_without_improvement = +1
+            consecutive_epochs_without_improvement +=1
         if consecutive_epochs_without_improvement >= max_consecutive_epochs_without_improvement:
             print(
                 f"Stopping training due to lack of improvement for {max_consecutive_epochs_without_improvement} epochs.")
@@ -721,7 +721,7 @@ def seg_train(args,train_loader,val_loader,counter,victim=True,shadow=False,plot
         if (t + 1) % 20 == 0 and args.model_should_be_saved:
             print("Saving checkpoint...")
             if victim:
-                if args.DPSGD == 'True':
+                if args.DPSGD:
                     save_model(args,model, model_name, optimizer, t, validation_loss,average_loss,args.main_dir,victim=victim, state='DPSGD')
                 else:
                     save_model(args,model, model_name, optimizer, t, validation_loss,average_loss,args.main_dir,victim=victim,state='normal')
